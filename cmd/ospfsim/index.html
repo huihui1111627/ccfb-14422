@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>灯塔航标站 OSPF 专网模拟器</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", monospace; margin: 0; background: #0e141b; color: #d5dde5; }
+  header { padding: 10px 16px; background: #16202b; display: flex; gap: 16px; align-items: center; border-bottom: 1px solid #2a3a4a; }
+  header h1 { font-size: 16px; margin: 0; color: #7fd4ff; }
+  header .stat { font-size: 12px; color: #8fa3b5; }
+  header button { background: #234; color: #bfe3ff; border: 1px solid #3a5a7a; border-radius: 4px; padding: 4px 10px; cursor: pointer; }
+  header button.on { background: #1d4a2a; border-color: #3a7a4a; }
+  #main { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 52vh 1fr; gap: 8px; padding: 8px; }
+  .panel { background: #131c26; border: 1px solid #263646; border-radius: 6px; overflow: auto; }
+  .panel h2 { font-size: 13px; margin: 0; padding: 8px 12px; background: #1a2634; color: #9fc7e8; position: sticky; top: 0; }
+  #topo { grid-row: span 2; }
+  #topoCanvas { width: 100%; height: calc(100% - 32px); display: block; cursor: pointer; }
+  table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  th, td { text-align: left; padding: 3px 8px; border-bottom: 1px solid #1e2c3a; white-space: nowrap; }
+  th { color: #6f8ca5; position: sticky; top: 32px; background: #131c26; }
+  tr.sel { background: #1d3042; }
+  tr:hover { background: #1a2a3a; cursor: pointer; }
+  .full { color: #6fe3a5; } .warn { color: #ffb454; } .down { color: #ff6b6b; }
+  .stuck { color: #ff9d54; font-size: 11px; }
+  #log { font-size: 11px; color: #7d93a8; padding: 6px 12px; max-height: 90px; overflow: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>灯塔航标站 OSPF 专网模拟器</h1>
+  <span class="stat" id="clock"></span>
+  <span class="stat" id="counts"></span>
+  <button id="weatherBtn" onclick="toggleWeather()">天气变化:开</button>
+  <span class="stat">点击链路可断开/恢复;双击链路改开销;点击路由器看详情</span>
+</header>
+<div id="main">
+  <div class="panel" id="topo"><h2>拓扑图</h2><canvas id="topoCanvas"></canvas></div>
+  <div class="panel"><h2>邻居状态</h2><table id="nbrTable"></table></div>
+  <div class="panel"><h2>链路状态库 (LSDB)</h2><table id="lsdbTable"></table></div>
+  <div class="panel"><h2>路由表</h2><table id="ribTable"></table></div>
+</div>
+<div id="log"></div>
+<script>
+let state = null, selected = null, positions = {};
+const areaColors = {0:'#4da3ff', 1:'#6fe3a5', 2:'#ffb454', 3:'#c792ff', 4:'#ff8fb5'};
+
+async function refresh() {
+  const r = await fetch('/api/state');
+  state = await r.json();
+  layout();
+  draw();
+  tables();
+  document.getElementById('clock').textContent = '仿真时钟 t=' + state.now;
+  const full = state.routers.reduce((n,r)=>n+r.nbrs.filter(x=>x.state==='Full').length,0);
+  const total = state.routers.reduce((n,r)=>n+r.nbrs.length,0);
+  document.getElementById('counts').textContent =
+    `路由器 ${state.routers.length} | 邻居 Full ${full}/${total} | 链路 ${state.links.filter(l=>l.up).length}/${state.links.length} 通`;
+  document.getElementById('log').innerHTML = (state.changelog||[]).slice(-8).map(x=>`<div>${x}</div>`).join('');
+}
+
+function layout() {
+  // group routers by primary (first non-backbone, else backbone) area
+  const groups = {};
+  for (const r of state.routers) {
+    const a = r.areas.includes(0) && r.areas.length>1 ? r.areas[1] : r.areas[0];
+    (groups[a] = groups[a]||[]).push(r.id);
+  }
+  const areas = Object.keys(groups).sort();
+  const cv = document.getElementById('topoCanvas');
+  const W = cv.clientWidth, H = cv.clientHeight;
+  const cols = Math.ceil(Math.sqrt(areas.length));
+  areas.forEach((a, i) => {
+    const cx = W*(0.5 + (i%cols))/cols, cy = H*(0.5+Math.floor(i/cols))/Math.ceil(areas.length/cols);
+    const rad = Math.min(W/cols, H/Math.ceil(areas.length/cols))*0.33;
+    const rs = groups[a];
+    rs.forEach((id, j) => {
+      const ang = 2*Math.PI*j/rs.length - Math.PI/2;
+      positions[id] = {x: cx+rad*Math.cos(ang), y: cy+rad*Math.sin(ang), area: a};
+    });
+  });
+}
+
+function draw() {
+  const cv = document.getElementById('topoCanvas');
+  cv.width = cv.clientWidth * devicePixelRatio;
+  cv.height = cv.clientHeight * devicePixelRatio;
+  const ctx = cv.getContext('2d');
+  ctx.scale(devicePixelRatio, devicePixelRatio);
+  ctx.clearRect(0,0,cv.clientWidth,cv.clientHeight);
+  // area labels
+  ctx.font = '12px sans-serif';
+  for (const a of new Set(state.routers.map(r=>r.areas).flat())) {
+    const info = state.areas[a];
+    if (!info) continue;
+  }
+  // links
+  for (const l of state.links) {
+    const p1 = positions[l.a], p2 = positions[l.b];
+    if (!p1 || !p2) continue;
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y);
+    if (!l.up) { ctx.strokeStyle = '#ff6b6b'; ctx.setLineDash([4,4]); }
+    else if (l.mtuA !== l.mtuB) { ctx.strokeStyle = '#ff9d54'; ctx.setLineDash([2,2]); }
+    else { ctx.strokeStyle = '#3d5a75'; ctx.setLineDash([]); }
+    ctx.lineWidth = l.up ? 1.5 : 1;
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // cost label
+    const mx=(p1.x+p2.x)/2, my=(p1.y+p2.y)/2;
+    ctx.fillStyle = l.up ? '#7d93a8' : '#ff6b6b';
+    ctx.font = '9px monospace';
+    ctx.fillText(`#${l.id} c${l.cost}${l.mtuA!==l.mtuB?' MTU!':''}`, mx+3, my-3);
+  }
+  // virtual links
+  for (const vl of (state.vlinks||[])) {
+    const p1 = positions[vl.a], p2 = positions[vl.b];
+    if (!p1 || !p2) continue;
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.quadraticCurveTo((p1.x+p2.x)/2, (p1.y+p2.y)/2 - 60, p2.x, p2.y);
+    ctx.strokeStyle = (vl.upA && vl.upB) ? '#35d0ba' : '#7a4a4a';
+    ctx.setLineDash([6,3]); ctx.lineWidth = 1.5; ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = '#35d0ba'; ctx.font = '9px monospace';
+    ctx.fillText('VL', (p1.x+p2.x)/2+4, (p1.y+p2.y)/2 - 42);
+  }
+  // routers
+  for (const r of state.routers) {
+    const p = positions[r.id];
+    if (!p) continue;
+    const col = areaColors[p.area] || '#9ab';
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r.id===selected?11:8, 0, 2*Math.PI);
+    ctx.fillStyle = col; ctx.fill();
+    if (r.abr) { ctx.beginPath(); ctx.arc(p.x, p.y, 12, 0, 2*Math.PI); ctx.strokeStyle='#fff'; ctx.lineWidth=1.2; ctx.stroke(); }
+    if (r.asbr) { ctx.beginPath(); ctx.arc(p.x+6, p.y-6, 3, 0, 2*Math.PI); ctx.fillStyle='#ffdd55'; ctx.fill(); }
+    if (r.id===selected) { ctx.beginPath(); ctx.arc(p.x, p.y, 14, 0, 2*Math.PI); ctx.strokeStyle='#7fd4ff'; ctx.lineWidth=2; ctx.stroke(); }
+    ctx.fillStyle = '#dce8f5'; ctx.font = '9px monospace';
+    const short = r.id.split('.').pop();
+    ctx.fillText(short, p.x-6, p.y+3);
+    // neighbor state indicator: worst non-full neighbor
+    const bad = r.nbrs.find(n=>n.state!=='Full');
+    if (bad) {
+      ctx.beginPath(); ctx.arc(p.x+8, p.y+8, 3.5, 0, 2*Math.PI);
+      ctx.fillStyle = bad.state==='Down' ? '#ff6b6b' : '#ffb454'; ctx.fill();
+    }
+  }
+}
+
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+
+function tables() {
+  // neighbors (all routers, or selected)
+  const rows = [];
+  for (const r of state.routers) {
+    if (selected && r.id !== selected) continue;
+    for (const n of r.nbrs) {
+      rows.push(`<tr class="${n.state==='Full'?'':'warn'}"><td>${r.id}</td><td>${n.peer}</td>`+
+        `<td>${n.vl?'VL(骨干)':'area '+n.area}</td><td class="${n.state==='Full'?'full':'warn'}">${n.state}</td>`+
+        `<td class="stuck">${esc(n.stuck||'')}</td></tr>`);
+    }
+  }
+  document.getElementById('nbrTable').innerHTML =
+    '<tr><th>路由器</th><th>邻居</th><th>接口</th><th>状态</th><th>卡住原因</th></tr>' + rows.join('');
+  if (!selected && state.routers.length) selected = state.routers[0].id;
+  const r = state.routers.find(x=>x.id===selected);
+  if (r) {
+    document.getElementById('lsdbTable').innerHTML =
+      `<tr><th colspan="4" onclick="selected=null" title="点击清除选择">${r.id} ${r.abr?'[ABR]':''}${r.asbr?'[ASBR]':''}</th></tr>`+
+      '<tr><th>LSA</th><th>Seq</th><th>Age</th><th>内容</th></tr>' +
+      r.lsdb.map(l=>`<tr class="${l.self?'sel':''}"><td>${esc(l.key)}</td><td>${l.seq}</td><td>${l.age}</td><td>${esc(l.desc)}</td></tr>`).join('');
+    document.getElementById('ribTable').innerHTML =
+      `<tr><th colspan="3">${r.id} 路由表</th></tr>`+
+      '<tr><th>前缀</th><th>类型</th><th>开销</th><th>下一跳</th></tr>' +
+      r.rib.map(x=>`<tr><td>${x.prefix}</td><td>${x.type}</td><td>${x.cost}</td><td>${(x.via||[]).join(', ')||'-'}</td></tr>`).join('');
+  }
+}
+
+document.getElementById('topoCanvas').addEventListener('click', e => {
+  const rect = e.target.getBoundingClientRect();
+  const x = e.clientX-rect.left, y = e.clientY-rect.top;
+  // router?
+  for (const r of state.routers) {
+    const p = positions[r.id];
+    if (p && Math.hypot(p.x-x, p.y-y) < 12) { selected = r.id; tables(); return; }
+  }
+  // link?
+  for (const l of state.links) {
+    const p1 = positions[l.a], p2 = positions[l.b];
+    if (!p1 || !p2) continue;
+    const d = distToSeg(x,y,p1.x,p1.y,p2.x,p2.y);
+    if (d < 6) { fetch(`/api/link/${l.id}/toggle`, {method:'POST'}).then(refresh); return; }
+  }
+});
+document.getElementById('topoCanvas').addEventListener('dblclick', e => {
+  const rect = e.target.getBoundingClientRect();
+  const x = e.clientX-rect.left, y = e.clientY-rect.top;
+  for (const l of state.links) {
+    const p1 = positions[l.a], p2 = positions[l.b];
+    if (!p1 || !p2) continue;
+    if (distToSeg(x,y,p1.x,p1.y,p2.x,p2.y) < 6) {
+      const c = prompt(`链路 #${l.id} 新开销:`, l.cost);
+      if (c) fetch(`/api/link/${l.id}/cost?c=${c}`, {method:'POST'}).then(refresh);
+      return;
+    }
+  }
+});
+function distToSeg(px,py,x1,y1,x2,y2){
+  const dx=x2-x1, dy=y2-y1, L2=dx*dx+dy*dy;
+  let t = L2? ((px-x1)*dx+(py-y1)*dy)/L2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px-(x1+t*dx), py-(y1+t*dy));
+}
+let weatherOn = true;
+async function toggleWeather() {
+  weatherOn = !weatherOn;
+  await fetch('/api/weather?on='+(weatherOn?1:0));
+  document.getElementById('weatherBtn').textContent = '天气变化:' + (weatherOn?'开':'关');
+  document.getElementById('weatherBtn').className = weatherOn?'on':'';
+}
+document.getElementById('weatherBtn').className = 'on';
+refresh();
+setInterval(refresh, 1000);
+</script>
+</body>
+</html>
