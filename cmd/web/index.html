@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>灯塔航标专网 OSPF 路由监视</title>
+<style>
+:root{
+  --bg:#0d1b2a; --panel:#13293d; --panel2:#1b3a52; --line:#28506e;
+  --ink:#dceaf5; --muted:#8fb3c9; --accent:#4cc9f0; --ok:#2ec27e;
+  --warn:#f4a531; --bad:#e5484d; --stub:#b48dea;
+}
+*{box-sizing:border-box}
+body{margin:0;font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  background:var(--bg);color:var(--ink)}
+header{display:flex;align-items:center;gap:16px;padding:10px 18px;background:var(--panel);
+  border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5;flex-wrap:wrap}
+header h1{font-size:16px;margin:0;font-weight:600;letter-spacing:.5px}
+header .sub{color:var(--muted);font-size:12px}
+.controls{display:flex;gap:8px;align-items:center;margin-left:auto;flex-wrap:wrap}
+button,select,input{background:var(--panel2);color:var(--ink);border:1px solid var(--line);
+  border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);color:#062a36;border-color:var(--accent);font-weight:600}
+input[type=number]{width:76px}
+.clock{font-variant-numeric:tabular-nums;color:var(--accent);font-weight:600}
+.layout{display:grid;grid-template-columns:minmax(420px,1.25fr) 1fr;gap:14px;padding:14px}
+@media(max-width:1100px){.layout{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;
+  display:flex;flex-direction:column;min-height:0}
+.panel h2{font-size:13px;margin:0;padding:8px 12px;background:var(--panel2);
+  border-bottom:1px solid var(--line);font-weight:600;display:flex;gap:10px;align-items:center}
+.panel h2 .tag{font-weight:400;color:var(--muted);font-size:11px}
+.panel .body{padding:10px 12px;overflow:auto}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:0 14px 14px}
+@media(max-width:1400px){.grid2{grid-template-columns:1fr}}
+svg#topo{width:100%;height:auto;display:block;background:linear-gradient(180deg,#0b1622,#0d1f31)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;padding:6px 12px;font-size:11px;color:var(--muted);
+  border-top:1px solid var(--line)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;vertical-align:middle}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{text-align:left;padding:4px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--muted);font-weight:500;position:sticky;top:0;background:var(--panel)}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+tr.sel td{background:var(--panel2)}
+tr.clickable{cursor:pointer}
+tr.clickable:hover td{background:var(--panel2)}
+.pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:600}
+.st-Full{background:rgba(46,194,126,.18);color:var(--ok)}
+.st-Down,.st-Init{background:rgba(229,72,77,.16);color:var(--bad)}
+.st-TwoWay,.st-ExStart,.st-Exchange,.st-Loading{background:rgba(244,165,49,.16);color:var(--warn)}
+.badge-stuck{background:rgba(229,72,77,.2);color:var(--bad);border:1px solid var(--bad);
+  padding:2px 8px;border-radius:6px;font-size:11px}
+.badge-virt{background:rgba(180,141,234,.2);color:var(--stub);padding:1px 6px;border-radius:4px;font-size:10px}
+.badge-area{background:var(--panel2);color:var(--muted);padding:1px 6px;border-radius:4px;font-size:10px}
+.tabs{display:flex;gap:6px;padding:8px 12px 0;flex-wrap:wrap}
+.tabs button{padding:4px 10px;font-size:11px;border-radius:6px 6px 0 0;border-bottom:none}
+.tabs button.on{background:var(--accent);color:#062a36;font-weight:600}
+.scroll{max-height:360px;overflow:auto}
+.scroll.tall{max-height:520px}
+.empty{color:var(--muted);padding:14px;text-align:center}
+.stat{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;padding:0 14px 14px}
+.stat .card{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.stat .card .k{color:var(--muted);font-size:11px}
+.stat .card .v{font-size:18px;font-weight:700;color:var(--accent);font-variant-numeric:tabular-nums}
+.stat .card.warn .v{color:var(--warn)}
+.stat .card.bad .v{color:var(--bad)}
+.timeline{max-height:240px;overflow:auto;font-size:11px;font-family:ui-monospace,Menlo,monospace}
+.timeline div{padding:2px 0;border-bottom:1px solid rgba(40,80,110,.4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.timeline .t{color:var(--muted)}
+.timeline .nbr{color:var(--warn)}
+.timeline .flood{color:var(--accent)}
+.timeline .stuck,.timeline .drop{color:var(--bad)}
+.timeline .spf{color:var(--stub)}
+.timeline .weather{color:#7fd1c0}
+.foot{color:var(--muted);font-size:11px;padding:0 16px 18px;line-height:1.6}
+.link{stroke:#28506e;stroke-width:2}
+.link.down{stroke:var(--bad);stroke-dasharray:5 5;stroke-width:2.4}
+.link.degraded{stroke:var(--warn)}
+.link.virt{stroke:var(--stub);stroke-dasharray:2 4}
+.node{cursor:pointer}
+.node circle{fill:var(--panel2);stroke:var(--accent);stroke-width:2}
+.node.abror circle{stroke-width:3}
+.node.abror circle{stroke:var(--stub)}
+.node.sel circle{fill:var(--accent)}
+.node text{fill:var(--ink);font-size:10px;text-anchor:middle;pointer-events:none}
+.node .aid{fill:var(--muted);font-size:9px}
+.mono{font-family:ui-monospace,Menlo,monospace}
+.mini{color:var(--muted);font-size:11px}
+.tt{position:fixed;pointer-events:none;background:#04121d;border:1px solid var(--accent);color:var(--ink);
+  padding:6px 9px;border-radius:6px;font-size:11px;z-index:20;display:none;max-width:300px}
+</style>
+</head>
+<body>
+<header>
+  <h1>灯塔航标专网 · OSPF 路由监视</h1>
+  <span class="sub">几十个站点 · 单进程 · 确定性事件队列</span>
+  <div class="controls">
+    <span class="clock" id="clock">t = 0s</span>
+    <button id="play" class="primary">▶ 开始仿真</button>
+    <button id="step">单步</button>
+    <label class="mini">种子 <input id="seed" type="number" value="42"></label>
+    <label class="mini">天气间隔 <input id="gap" type="number" value="20000"></label>
+    <button id="reset">重置</button>
+  </div>
+</header>
+
+<div class="stat" id="stats"></div>
+
+<div class="layout">
+  <div class="panel">
+    <h2>拓扑图 <span class="tag" id="topoTag"></span></h2>
+    <svg id="topo" viewBox="0 0 780 660" preserveAspectRatio="xMidYMid meet"></svg>
+    <div class="legend">
+      <span><i style="background:var(--accent)"></i>站点</span>
+      <span><i style="background:var(--stub)"></i>区域边界路由器</span>
+      <span><i style="background:var(--ok)"></i>链路正常</span>
+      <span><i style="background:var(--warn)"></i>天气降级</span>
+      <span><i style="background:var(--bad)"></i>链路中断</span>
+      <span style="color:var(--stub)">··· 虚链路</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>邻居状态 <span class="tag" id="nbrTag">选择站点查看</span></h2>
+    <div class="body scroll tall" id="nbrs"><div class="empty">在拓扑图上点击一个站点</div></div>
+  </div>
+</div>
+
+<div class="grid2">
+  <div class="panel">
+    <h2>链路状态数据库 <span class="tag" id="lsdbTag"></span></h2>
+    <div class="tabs" id="lsdbTabs"></div>
+    <div class="body scroll" id="lsdb"><div class="empty">选择站点查看其链路状态数据库</div></div>
+  </div>
+  <div class="panel">
+    <h2>路由表 <span class="tag" id="routeTag"></span></h2>
+    <div class="body scroll" id="routes"><div class="empty">选择站点查看其路由表</div></div>
+  </div>
+</div>
+
+<div class="grid2">
+  <div class="panel">
+    <h2>协议事件时间线 <span class="tag">最近的邻居、洪泛与最短路径计算</span></h2>
+    <div class="body timeline" id="timeline"></div>
+  </div>
+  <div class="panel">
+    <h2>链路状态通告洪泛统计 <span class="tag">泛洪 / 重传次数</span></h2>
+    <div class="body scroll" id="lsaStats"></div>
+  </div>
+</div>
+
+<div class="foot">
+  说明：链路状态数据库在区域连通时要求逐条一致（按序号、校验和与内容比较，老化时间按协议允许漂移）；
+  邻居状态机遵循 RFC 2328 的状态转移表；最短路径树在链路开销变化或单条链路中断时做增量计算，并定期与整棵重算核对。
+</div>
+<div class="tt" id="tt"></div>
+
+<script>
+const AREA_COLORS = {0:"#4cc9f0",1:"#7fd1c0",2:"#f4a531",3:"#e5484d",4:"#b48dea"};
+let state=null, selected=null, selArea=null, playing=false, timer=null;
+
+function fmtT(ms){ const s=Math.floor(ms/1000); const m=Math.floor(s/60); return m>0?`${m}m${s%60}s`:`${s}s`; }
+function esc(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+async function fetchState(){
+  const r = await fetch('/api/state'); state = await r.json();
+  render();
+}
+async function advance(){
+  await fetch('/api/advance',{method:'POST'});
+  await fetchState();
+}
+async function reset(){
+  const seed = document.getElementById('seed').value||42;
+  const gap = document.getElementById('gap').value||20000;
+  await fetch(`/api/reset?seed=${seed}&gap=${gap}`,{method:'POST'});
+  selected=null; selArea=null;
+  await fetchState();
+}
+
+function render(){
+  if(!state) return;
+  const snap = state.snapshot;
+  document.getElementById('clock').textContent = 't = '+fmtT(snap.At);
+  renderStats(snap);
+  renderTopo(snap);
+  renderTimeline(snap);
+  renderLSAStats(snap);
+  if(selected!=null) renderRouter(selected);
+  else document.getElementById('topoTag').textContent = '共 '+snap.Routers.length+' 个站点';
+}
+
+function renderStats(snap){
+  const c = snap.Counters;
+  const full = snap.Routers.reduce((a,r)=>a+r.Nbrs.filter(n=>n.State==='Full').length,0);
+  const stuck = snap.Routers.flatMap(r=>r.Nbrs.filter(n=>n.MtuDisagreement));
+  const down = snap.Links.filter(l=>!l.Up).length;
+  const degraded = snap.Links.filter(l=>l.Up && l.Cost>l.BaseCost).length;
+  const cards = [
+    ['站点', snap.Routers.length, ''],
+    ['区域', snap.Areas.length, ''],
+    ['物理链路', snap.Links.length, ''],
+    ['链路中断', down, down?'bad':''],
+    ['天气降级', degraded, degraded?'warn':''],
+    ['完全邻接', full, ''],
+    ['MTU 卡住', stuck.length, stuck.length?'bad':''],
+    ['已发报文', c.PacketsSent, ''],
+    ['丢包', c.PacketsLost, c.PacketsLost>0?'warn':''],
+    ['SPF 增量/全量', (c.SPFIncr||0)+' / '+(c.SPFFull||0), ''],
+    ['泛洪次数', c.Flooded, ''],
+    ['重传次数', c.Retrans, c.Retrans>0?'warn':''],
+  ];
+  document.getElementById('stats').innerHTML = cards.map(([k,v,cls])=>
+    `<div class="card ${cls}"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+}
+
+function linkClass(l){
+  if(l.Virtual) return l.Up ? 'virt' : 'virt down';
+  if(!l.Up) return 'down';
+  if(l.Cost>l.BaseCost) return 'degraded';
+  return '';
+}
+
+function renderTopo(snap){
+  const svg = document.getElementById('topo');
+  const ipOf = v => [ (v>>>24)&255,(v>>>16)&255,(v>>>8)&255,v&255 ].join('.');
+  const rByIP = {}; snap.Routers.forEach(r => rByIP[ipOf(r.ID)] = r);
+  let s='';
+  for(const l of snap.Links){
+    const ra = rByIP[l.A], rb = rByIP[l.B];
+    if(!ra || !rb) continue;
+    const virt = l.Virtual ? ' · 虚链路(穿越区域'+l.Transit+')' : '';
+    s += `<line class="link ${linkClass(l)}" x1="${ra.X}" y1="${ra.Y}" x2="${rb.X}" y2="${rb.Y}"
+      data-tip="${esc(l.ID)} · ${esc(l.Condition)} · 开销 ${l.Cost}${virt}${l.Up?'':' (不可用)'}"></line>`;
+  }
+  for(const r of snap.Routers){
+    const area = r.Areas[0];
+    const col = AREA_COLORS[area] || '#4cc9f0';
+    const cls = (selected===r.ID?'sel ':'') + (r.IsABR?'abror ':'');
+    s += `<g class="node ${cls}" data-id="${r.ID}" transform="translate(${r.X},${r.Y})">
+      <circle r="14" style="stroke:${col}"></circle>
+      <text y="26">${esc(r.Name)}</text>
+      <text class="aid" y="38">${esc(r.Areas.map(a=>'区域'+a).join(' '))}</text>
+    </g>`;
+  }
+  svg.innerHTML = s;
+  svg.querySelectorAll('.node').forEach(g=>{
+    g.addEventListener('click',()=>{ selected = +g.dataset.id; selArea=null; render(); });
+    g.addEventListener('mousemove',ev=>showTip(ev,g));
+    g.addEventListener('mouseleave',hideTip);
+  });
+  svg.querySelectorAll('line[data-tip]').forEach(ln=>{
+    ln.addEventListener('mousemove',ev=>showTipText(ev, ln.dataset.tip));
+    ln.addEventListener('mouseleave',hideTip);
+  });
+  document.getElementById('topoTag').textContent = '共 '+snap.Routers.length+' 个站点 · 点击查看';
+}
+
+function renderRouter(id){
+  const r = state.snapshot.Routers.find(x=>x.ID===id);
+  if(!r){ return; }
+  document.getElementById('nbrTag').textContent = r.Name + (r.IsABR?' · 区域边界路由器':'') + (r.IsASBR?' · ASBR':'');
+  // neighbours
+  let h='';
+  if(r.Nbrs.length===0){ h='<div class="empty">暂无邻居</div>'; }
+  else{
+    h='<table><thead><tr><th>邻居</th><th>接口</th><th>区域</th><th>状态</th><th>主/从</th><th>MTU</th><th class="num">Hello</th></tr></thead><tbody>';
+    for(const n of r.Nbrs){
+      const stuck = n.MtuDisagreement ? ` <span class="badge-stuck">卡住：${esc(n.StuckReason)}</span>`:'';
+      h+=`<tr><td class="mono">${esc(n.RouterID)}</td><td class="mono">${esc(n.Interface)}</td>
+        <td>${n.Area}</td><td><span class="pill st-${n.State}">${esc(n.State)}</span>${stuck}</td>
+        <td>${n.Master?'主':'从'}</td><td class="num">${n.MtuLocal}/${n.MtuRemote||'-'}</td><td class="num">${n.HellosRecv}</td></tr>`;
+    }
+    h+='</tbody></table>';
+  }
+  document.getElementById('nbrs').innerHTML = h;
+
+  // lsdb tabs by area
+  const tabs = document.getElementById('lsdbTabs');
+  const areas = Object.keys(r.DB||{}).map(Number).sort((a,b)=>a-b);
+  if(selArea==null || !areas.includes(selArea)) selArea = areas[0];
+  tabs.innerHTML = areas.map(a=>`<button class="${a===selArea?'on':''}" data-a="${a}">区域 ${a}</button>`).join('');
+  tabs.querySelectorAll('button').forEach(b=>b.onclick=()=>{selArea=+b.dataset.a; renderRouter(id);});
+  document.getElementById('lsdbTag').textContent = r.Name;
+  const lsas = (r.DB&&r.DB[selArea])||[];
+  if(lsas.length===0){ document.getElementById('lsdb').innerHTML='<div class="empty">该区域数据库为空</div>'; }
+  else{
+    let t='<table><thead><tr><th>类型</th><th>链路标识</th><th>通告路由器</th><th>序号</th><th class="num">老化</th><th>校验和</th><th>内容</th></tr></thead><tbody>';
+    for(const l of lsas){
+      t+=`<tr><td>${esc(l.Type)}</td><td class="mono">${esc(l.LinkID)}</td><td class="mono">${esc(l.AdvRtr)}</td>
+        <td class="mono">${esc(l.Seq)}</td><td class="num">${l.Age}</td><td class="mono">${esc(l.Checksum)}</td>
+        <td class="mono">${esc(l.Summary||'')}</td></tr>`;
+    }
+    t+='</tbody></table>';
+    document.getElementById('lsdb').innerHTML=t;
+  }
+
+  // routes
+  document.getElementById('routeTag').textContent = r.Name + ' · ' + r.Routes.length + ' 条';
+  if(r.Routes.length===0){ document.getElementById('routes').innerHTML='<div class="empty">路由表为空</div>'; }
+  else{
+    let t='<table><thead><tr><th>目的</th><th>类型</th><th class="num">开销</th><th>下一跳</th><th>区域</th><th>备注</th></tr></thead><tbody>';
+    for(const rt of r.Routes){
+      const note = rt.Virtual?'虚链路':(rt.ViaBackbone?'经骨干':'');
+      t+=`<tr><td class="mono">${esc(rt.Prefix)}</td><td>${esc(rt.Type)}</td><td class="num">${rt.Cost}</td>
+        <td class="mono">${esc(rt.NextHop)}</td><td>${rt.Area}</td><td class="mini">${note}</td></tr>`;
+    }
+    t+='</tbody></table>';
+    document.getElementById('routes').innerHTML=t;
+  }
+}
+
+function renderTimeline(snap){
+  const el = document.getElementById('timeline');
+  const evs = (snap.Audit||[]).slice().reverse();
+  el.innerHTML = evs.map(e=>{
+    const cls = {nbr:'nbr',flood:'flood',stuck:'stuck',drop:'drop',spf:'spf',weather:'weather',area:'weather'}[e.Kind]||'';
+    return `<div><span class="t">${fmtT(e.At)}</span> <span class="${cls}">${esc(e.Text)}</span></div>`;
+  }).join('') || '<div class="empty">暂无事件</div>';
+}
+
+function renderLSAStats(snap){
+  const el = document.getElementById('lsaStats');
+  const lsas = (snap.LSACounts||[]).filter(x=>x.Flooded>0||x.Retransmitted>0).slice(0,120);
+  if(lsas.length===0){ el.innerHTML='<div class="empty">暂无泛洪</div>'; return; }
+  let t='<table><thead><tr><th>类型</th><th>标识</th><th>通告者</th><th class="num">泛洪</th><th class="num">重传</th><th class="num">接收</th></tr></thead><tbody>';
+  for(const l of lsas){
+    t+=`<tr><td>${esc(l.Type)}</td><td class="mono">${ipOf(l.Key.ID)}</td><td class="mono">${ipOf(l.AdvRtr)}</td>
+      <td class="num">${l.Flooded}</td><td class="num">${l.Retransmitted}</td><td class="num">${l.Received}</td></tr>`;
+  }
+  t+='</tbody></table>';
+  el.innerHTML=t;
+}
+
+function ipOf(v){ return [ (v>>>24)&255,(v>>>16)&255,(v>>>8)&255,v&255].join('.'); }
+
+function showTip(ev,g){
+  const id=+g.dataset.id; const r=state.snapshot.Routers.find(x=>x.ID===id);
+  if(!r) return;
+  const full=r.Nbrs.filter(n=>n.State==='Full').length;
+  showTipText(ev, `${r.Name}\n区域 ${r.Areas.join(', ')}\n邻居 ${full}/${r.Nbrs.length} 完全邻接\n路由 ${r.Routes.length} 条`);
+}
+function showTipText(ev,text){
+  const tt=document.getElementById('tt');
+  tt.style.display='block'; tt.textContent=text;
+  tt.style.left=(ev.clientX+14)+'px'; tt.style.top=(ev.clientY+14)+'px';
+}
+function hideTip(){ document.getElementById('tt').style.display='none'; }
+
+document.getElementById('step').onclick=advance;
+document.getElementById('reset').onclick=reset;
+document.getElementById('play').onclick=()=>{
+  playing=!playing;
+  document.getElementById('play').textContent = playing?'⏸ 暂停':'▶ 开始仿真';
+  if(playing){ timer=setInterval(async()=>{ if(state&&state.done){ playing=false; clearInterval(timer);
+      document.getElementById('play').textContent='▶ 开始仿真'; return;} await advance(); }, 260); }
+  else clearInterval(timer);
+};
+
+fetchState();
+</script>
+</body>
+</html>
